@@ -1,3 +1,7 @@
+# Normalize line endings in the repository
+* text=auto
+
+# Force LF for source/docs
 *.py text eol=lf
 *.md text eol=lf
-*.py text eol=lf
+*.txt text eol=lf
