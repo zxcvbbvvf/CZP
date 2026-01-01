@@ -112,7 +112,7 @@ except Exception:
 # Tool (human-facing) version: bump when you tag a release.
 TOOL_VERSION = "0.1.0"
 # Build identifier: bump whenever output bytes may change (forward-only).
-BUILD_ID = "phase3d5f_fix2_bitio12_repro2_auto2_fix16_pi_bypass1_dna_large2"
+BUILD_ID = "phase3d5f_fix2_bitio12_repro2_auto2_fix16_pi_bypass1_dna_large2_pitie1"
 # Full version string stored in metadata/logs.
 VERSION_STR = f"{TOOL_VERSION}+{BUILD_ID}"
 __version__ = VERSION_STR
@@ -1559,7 +1559,7 @@ def choose_plan(
         for (fi, approx_sim, sig) in cands:
             sim = pi_similarity(feat.pi_sig, sig)
             # slight tie-break toward higher approx_sim (deterministic)
-            if sim > best_sim or (sim == best_sim and approx_sim > 0 and fi < best_idx):
+            if sim > best_sim or (sim == best_sim and approx_sim > 0 and (best_idx < 0 or fi < best_idx)):
                 best_sim = sim
                 best_idx = fi
         feat.pi_sim_hint = best_sim
@@ -2318,7 +2318,7 @@ def build_archive(
 
                     files_meta.append(FileMeta(
                         path=rp,
-                        mtime_ns=(canon_mtime_ns if canon_mtime_ns is not None else (canon_mtime_ns if canon_mtime_ns is not None else int(st.st_mtime_ns))),
+                        mtime_ns=(canon_mtime_ns if canon_mtime_ns is not None else int(st.st_mtime_ns)),
                         raw_size=raw_size,
                         file_crc32=file_crc,
                         class_id=4,
@@ -2383,7 +2383,7 @@ def build_archive(
                     spans.append((bid, len(data), SPANF_DNA | SPANF_LAST | (SPANF_HIGHENT if (plan.flags & SPANF_HIGHENT) else 0)))
                     files_meta.append(FileMeta(
                         path=rp,
-                        mtime_ns=(canon_mtime_ns if canon_mtime_ns is not None else (canon_mtime_ns if canon_mtime_ns is not None else int(st.st_mtime_ns))),
+                        mtime_ns=(canon_mtime_ns if canon_mtime_ns is not None else int(st.st_mtime_ns)),
                         raw_size=len(data),
                         file_crc32=raw_crc,
                         class_id=2,
@@ -2450,7 +2450,7 @@ def build_archive(
                         spans.append((bid, len(raw), SPANF_PI | SPANF_LAST))
                         files_meta.append(FileMeta(
                             path=rp,
-                            mtime_ns=(canon_mtime_ns if canon_mtime_ns is not None else (canon_mtime_ns if canon_mtime_ns is not None else int(st.st_mtime_ns))),
+                            mtime_ns=(canon_mtime_ns if canon_mtime_ns is not None else int(st.st_mtime_ns)),
                             raw_size=len(raw),
                             file_crc32=raw_crc,
                             class_id=3,
@@ -2584,7 +2584,7 @@ def build_archive(
             spans.append((bid, len(data), SPANF_LAST))
             files_meta.append(FileMeta(
                 path=rp,
-                mtime_ns=(canon_mtime_ns if canon_mtime_ns is not None else (canon_mtime_ns if canon_mtime_ns is not None else int(st.st_mtime_ns))),
+                mtime_ns=(canon_mtime_ns if canon_mtime_ns is not None else int(st.st_mtime_ns)),
                 raw_size=len(data),
                 file_crc32=(raw_crc & 0xffffffff),
                 class_id=0,
