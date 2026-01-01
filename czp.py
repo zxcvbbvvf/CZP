@@ -112,7 +112,7 @@ except Exception:
 # Tool (human-facing) version: bump when you tag a release.
 TOOL_VERSION = "0.1.0"
 # Build identifier: bump whenever output bytes may change (forward-only).
-BUILD_ID = "phase3d5f_fix2_bitio12_repro2_auto2_fix16"
+BUILD_ID = "phase3d5f_fix2_bitio12_repro2_auto2_fix16_pi_bypass1_dna_large2"
 # Full version string stored in metadata/logs.
 VERSION_STR = f"{TOOL_VERSION}+{BUILD_ID}"
 __version__ = VERSION_STR
@@ -336,11 +336,13 @@ THR_FLOOR_BY_CLASS = {
 # PI lane v1 (delta-from-base)
 PI_ENABLE = True
 PI_SIM_THR = 0.20             # Jaccard-ish sample similarity threshold
+PI_BH_BYPASS_SIM = 0.80      # allow PI even under BH suppression when similarity is very high
 PI_MAX_BASE_CAND = 16         # compare against last K matching-ext files
 PI_BASE_STORE_MAX = 256  # bounded in-memory PI base cache (bytes)
 
 PI_MIN_RAW = 32 * 1024        # don't bother for tiny files
 PI_MAX_RAW = 256 * 1024 * 1024  # safety cap for in-memory delta v1
+DNA_MAX_RAW = 256 * 1024 * 1024  # allow DNA lane up to this raw size (bytes)
 
 # black-hole policy (work suppression near entropy horizon)
 BH_ENABLE = True
@@ -1564,11 +1566,18 @@ def choose_plan(
         if best_sim >= PI_SIM_THR:
             state = GateState.STRUCT_GENERATIVE
             pi_best = (best_sim, best_idx)
-    # Work suppression near horizon
+    # Work suppression near horizon (black-hole policy)
     work = bh_work_factor(feat.entropy)
-    if work <= 0.05:
+
+    # PI bypass: if we have a very strong PI match, allow PI even when BH work collapses.
+    pi_bypass = bool(PI_ENABLE and (pi_best[1] >= 0) and (pi_best[0] >= PI_BH_BYPASS_SIM))
+
+    if work <= 0.05 and not pi_bypass:
         # near horizon: avoid CDC/structure
         state = GateState.CONTAINER_ENTROPIC if feat.is_container else GateState.RAW_ENTROPIC
+    elif work <= 0.05 and pi_bypass:
+        # Keep structural state so PI can fire.
+        state = GateState.STRUCT_GENERATIVE
 
     # default behavior based on state
     # Choose eff chunk and level
@@ -1576,12 +1585,69 @@ def choose_plan(
     eff_chunk = chunk_size
 
     if raw_size > whole_max:
-        # do not buffer huge whole files in memory.
-        # For media-like (already-compressed) data, we still avoid deep work; we just stream via CDC.
-        if state != GateState.STRUCT_GENERATIVE:
-            return Plan(state=state, action="CDC", eff_chunk=eff_chunk, eff_level=eff_level, thr_used=thr_eff,
-                        flags=(SPANF_HIGHENT if state in (GateState.RAW_ENTROPIC, GateState.CONTAINER_ENTROPIC) else 0),
-                        dbg={"force_stream": True, "reason": "LARGE_FILE_STREAMING", "work": work, "thr_bias": invc.thr_bias, "bh_bump": bh_thr_bump(feat.entropy), "pi_best": pi_best})
+        # Do not buffer huge whole files in memory.
+        #
+        # Exception: we *do* allow STRUCT lanes (PI/DNA) to operate on larger inputs,
+        # but only up to explicit per-lane caps. Past that, we fall back to streaming CDC.
+        allow_struct = state in (GateState.STRUCT_GENERATIVE, GateState.STRUCT_MOTIF)
+        if not allow_struct:
+            return Plan(
+                state=state,
+                action="CDC",
+                eff_chunk=eff_chunk,
+                eff_level=eff_level,
+                thr_used=thr_eff,
+                flags=(SPANF_HIGHENT if state in (GateState.RAW_ENTROPIC, GateState.CONTAINER_ENTROPIC) else 0),
+                dbg={
+                    "force_stream": True,
+                    "reason": "LARGE_FILE_STREAMING",
+                    "work": work,
+                    "thr_bias": invc.thr_bias,
+                    "bh_bump": bh_thr_bump(feat.entropy),
+                    "pi_best": pi_best,
+                },
+            )
+
+        # STRUCT_GENERATIVE (PI lane) is permitted up to PI_MAX_RAW.
+        if state is GateState.STRUCT_GENERATIVE and raw_size > PI_MAX_RAW:
+            return Plan(
+                state=state,
+                action="CDC",
+                eff_chunk=eff_chunk,
+                eff_level=eff_level,
+                thr_used=thr_eff,
+                flags=(SPANF_HIGHENT if state in (GateState.RAW_ENTROPIC, GateState.CONTAINER_ENTROPIC) else 0),
+                dbg={
+                    "force_stream": True,
+                    "reason": "LARGE_FILE_STREAMING_PI_CAP",
+                    "cap": PI_MAX_RAW,
+                    "work": work,
+                    "thr_bias": invc.thr_bias,
+                    "bh_bump": bh_thr_bump(feat.entropy),
+                    "pi_best": pi_best,
+                },
+            )
+
+        # STRUCT_MOTIF (DNA lane) is permitted up to DNA_MAX_RAW.
+        if state is GateState.STRUCT_MOTIF and raw_size > DNA_MAX_RAW:
+            return Plan(
+                state=state,
+                action="CDC",
+                eff_chunk=eff_chunk,
+                eff_level=eff_level,
+                thr_used=thr_eff,
+                flags=(SPANF_HIGHENT if state in (GateState.RAW_ENTROPIC, GateState.CONTAINER_ENTROPIC) else 0),
+                dbg={
+                    "force_stream": True,
+                    "reason": "LARGE_FILE_STREAMING_DNA_CAP",
+                    "cap": DNA_MAX_RAW,
+                    "work": work,
+                    "thr_bias": invc.thr_bias,
+                    "bh_bump": bh_thr_bump(feat.entropy),
+                    "pi_best": pi_best,
+                },
+            )
+
 
     # MICRO lane (only if WHOLE and small)
     def micro_ok() -> bool:
@@ -1596,11 +1662,11 @@ def choose_plan(
                         flags=0, dbg={"motif_score": feat.motif_score, "work": work, "thr_bias": invc.thr_bias})
 
     # PI lane candidate
-    if state == GateState.STRUCT_GENERATIVE and work > 0.2 and pi_best[1] >= 0:
+    if state == GateState.STRUCT_GENERATIVE and pi_best[1] >= 0 and (work > 0.2 or pi_best[0] >= PI_BH_BYPASS_SIM):
         # Even if probe_gain is low, delta can win; accept if similarity high
         if pi_best[0] >= PI_SIM_THR:
             return Plan(state=state, action="PI", eff_chunk=eff_chunk, eff_level=eff_level, thr_used=thr_eff,
-                        flags=0, dbg={"pi_sim": pi_best[0], "base_index": pi_best[1], "work": work})
+                        flags=0, dbg={"pi_sim": pi_best[0], "base_index": pi_best[1], "work": work, "pi_bypass": pi_bypass})
 
     # Entropic states: WHOLE store-ish
     if state in (GateState.RAW_ENTROPIC, GateState.CONTAINER_ENTROPIC):
