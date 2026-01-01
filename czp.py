@@ -112,7 +112,7 @@ except Exception:
 # Tool (human-facing) version: bump when you tag a release.
 TOOL_VERSION = "0.1.0"
 # Build identifier: bump whenever output bytes may change (forward-only).
-BUILD_ID = "phase3d5f_fix2_bitio12_repro2_auto2_fix16_pi_bypass1_dna_large2_pitie1"
+BUILD_ID = "phase3d5f_fix2_bitio12_repro2_auto2_fix16_pi_bypass1_dna_large2_pitie1_cdc_real1"
 # Full version string stored in metadata/logs.
 VERSION_STR = f"{TOOL_VERSION}+{BUILD_ID}"
 __version__ = VERSION_STR
@@ -2471,6 +2471,7 @@ def build_archive(
 
             # CDC lane
             if plan.action == "CDC":
+                cdc_encoded_bytes = 0
                 file_crc = 0
                 pending: List[Tuple[int, bytes, int, int, int]] = []  # (bid, chunk, raw_crc, h32, flags_base)
                 for chunk in iter_file_chunks(p, plan.eff_chunk):
@@ -2524,9 +2525,11 @@ def build_archive(
                                 h32,
                             ) + comp
                             write_section(fout, TAG_CHNK, payload)
+                            cdc_encoded_bytes += (SEC_HDR.size + len(payload))
                             blocks_written += 1
                             codec_counts[codec] += 1
                     pending.clear()
+                observed_gain = max(0.0, 1.0 - (cdc_encoded_bytes / float(raw_size if raw_size else 1)))
                 inv.update(feat.class_tag, observed_gain)
                 if PI_ENABLE and pi_enabled:
                     # base signatures (store only if manageable)
